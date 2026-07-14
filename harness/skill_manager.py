@@ -75,7 +75,6 @@ class SkillManager:
         mod_execute = getattr(mod, "execute", None)
         if isinstance(mod_info, SkillInfo) and callable(mod_execute):
             # 将模块本身作为 skill 对象（info + execute 属性）
-            mod.execute = mod_execute  # ensure it's bound
             return mod
 
         # 方式 2：类实例模式（info 作为实例属性）

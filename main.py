@@ -9,6 +9,7 @@ IOC 识别 Agent - 入口
 用法:
   python main.py https://example.com/threat-report
   python main.py --text "检测到恶意IP 192.168.1.1 连接C2服务器"
+  python main.py --url-file urls.txt
   python main.py --interactive
 """
 
@@ -17,6 +18,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import uuid
 import argparse
 from pathlib import Path
 from datetime import datetime
@@ -33,8 +35,9 @@ def setup_logging(level: str = "INFO"):
         level=level,
         format="<green>{time:HH:mm:ss}</green> | <level>{level:7}</level> | {message}",
     )
+    output_dir = os.getenv("OUTPUT_DIR", "./output").rstrip("/\\")
     logger.add(
-        "output/ioc_agent_{time:YYYY-MM-DD}.log",
+        output_dir + "/log/{time:YYYY.M}/ioc_agent_{time:YYYY-MM-DD}.log",
         level="DEBUG",
         rotation="10 MB",
         retention=3,
@@ -78,7 +81,8 @@ def init_agent() -> tuple[SkillManager, Scheduler]:
     return skill_mgr, scheduler
 
 
-def run_pipeline(url: str | None = None, text: str | None = None) -> Context:
+def run_pipeline(url: str | None = None, text: str | None = None,
+                 write_report: bool = True) -> Context:
     """
     执行完整的 IOC 识别流水线：
     1. 网页抓取（如果有 URL）
@@ -173,7 +177,7 @@ def run_pipeline(url: str | None = None, text: str | None = None) -> Context:
         logger.info("  跳过（未配置 API Key）")
 
     # ── 生成报告 ──────────────────────────────
-    generate_report(ctx)
+    generate_report(ctx, write=write_report)
     return ctx
 
 
@@ -230,15 +234,16 @@ _IOC_TYPE_LABEL = {
 }
 
 
-def generate_report(ctx: Context):
-    """生成最终 IOC 分析报告。"""
+def generate_report(ctx: Context, write: bool = True):
+    """生成单条 IOC 分析报告。write=False 时只构建文本、不落盘（供批量模式复用）。"""
+    now = datetime.now()
     malicious = [i for i in ctx.analyzed_iocs if i.get("malicious") == "malicious"]
     suspicious = [i for i in ctx.analyzed_iocs if i.get("malicious") == "suspicious"]
     benign = [i for i in ctx.analyzed_iocs if i.get("malicious") == "benign"]
 
     lines = []
     lines.append("# IOC 识别分析报告")
-    lines.append(f"\n**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"\n**生成时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"**来源**: {ctx.url or '直接输入'}")
     lines.append(f"**会话 ID**: {ctx.session_id}")
     lines.append("")
@@ -308,17 +313,140 @@ def generate_report(ctx: Context):
 
     ctx.final_report = "\n".join(lines)
 
-    # 写入文件
-    output_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
-    output_dir.mkdir(parents=True, exist_ok=True)
-    report_path = output_dir / f"ioc_report_{ctx.session_id}.md"
-    report_path.write_text(ctx.final_report, encoding="utf-8")
-    logger.success(f"报告已保存: {report_path}")
+    if write:
+        _write_outputs("ioc_report", ctx.session_id, now, ctx.final_report, ctx.to_dict())
 
-    # 同时导出 JSON
-    json_path = output_dir / f"ioc_report_{ctx.session_id}.json"
-    json.dump(ctx.to_dict(), open(json_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+
+def _write_outputs(stem_prefix: str, session_id: str, now: datetime,
+                   md_text: str, json_obj: dict):
+    """把一份 md + 一份 json 写到 output/<类型>/<年.月>/ 下。
+
+    文件名：<前缀>_<时间戳>_<ID>，例如 ioc_report_20260714_143022_64eeab1eb5bc。
+    """
+    base_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
+    month_folder = f"{now.year}.{now.month}"          # 例如 2026.7
+    timestamp = now.strftime("%Y%m%d_%H%M%S")         # 例如 20260714_143022
+    stem = f"{stem_prefix}_{timestamp}_{session_id}"
+
+    md_dir = base_dir / "md" / month_folder
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_path = md_dir / f"{stem}.md"
+    md_path.write_text(md_text, encoding="utf-8")
+    logger.success(f"报告已保存: {md_path}")
+
+    json_dir = base_dir / "json" / month_folder
+    json_dir.mkdir(parents=True, exist_ok=True)
+    json_path = json_dir / f"{stem}.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_obj, f, ensure_ascii=False, indent=2)
     logger.success(f"JSON 已导出: {json_path}")
+
+
+_VERDICT_ORDER = {"malicious": 0, "suspicious": 1, "benign": 2}
+
+
+def generate_batch_report(contexts: list[Context], source_file: str):
+    """把整批 URL 的分析结果汇总成「一份 md + 一份 json」。"""
+    now = datetime.now()
+    batch_id = uuid.uuid4().hex[:12]
+
+    # 汇总所有 IOC 行：(来源序号, ioc, 判定)，按 恶意→可疑→良性 排序
+    all_rows: list[tuple[int, dict, str]] = []
+    for si, c in enumerate(contexts, 1):
+        ordered = sorted(
+            c.analyzed_iocs,
+            key=lambda i: _VERDICT_ORDER.get(i.get("malicious", ""), 3),
+        )
+        for ioc in ordered:
+            all_rows.append((si, ioc, ioc.get("malicious", "")))
+
+    total_extracted = sum(len(c.extracted_iocs) for c in contexts)
+    total_filtered = sum(len(c.filtered_iocs) for c in contexts)
+    total_mal = sum(1 for _, _, v in all_rows if v in ("malicious", "suspicious"))
+    total_ben = sum(1 for _, _, v in all_rows if v == "benign")
+    failed = [c for c in contexts if c.metadata.get("batch_error")]
+    ok_count = len(contexts) - len(failed)
+
+    lines = []
+    lines.append("# IOC 批量识别分析报告")
+    lines.append(f"\n**生成时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"**来源文件**: {source_file}")
+    lines.append(f"**批次 ID**: {batch_id}")
+    lines.append(f"**分析 URL 数**: {len(contexts)}（成功 {ok_count}，失败 {len(failed)}）")
+    lines.append("")
+
+    # 统计摘要
+    lines.append("## 统计摘要")
+    lines.append("| 指标 | 数量 |")
+    lines.append("|------|------|")
+    lines.append(f"| 分析 URL 数 | {len(contexts)} |")
+    lines.append(f"| 提取 IOC 总数 | {total_extracted} |")
+    lines.append(f"| 白名单过滤后 | {total_filtered} |")
+    lines.append(f"| 判定恶意 | {total_mal} |")
+    lines.append(f"| 判定非恶意 | {total_ben} |")
+    lines.append("")
+
+    # URL 概览
+    lines.append("## URL 概览")
+    lines.append("| # | URL | 提取 | 过滤后 | 恶意 | 状态 |")
+    lines.append("|---|-----|------|--------|------|------|")
+    for si, c in enumerate(contexts, 1):
+        mal_c = sum(
+            1 for i in c.analyzed_iocs
+            if i.get("malicious") in ("malicious", "suspicious")
+        )
+        status = "❌ 失败" if c.metadata.get("batch_error") else "✅"
+        lines.append(
+            f"| {si} | {c.url} | {len(c.extracted_iocs)} "
+            f"| {len(c.filtered_iocs)} | {mal_c} | {status} |"
+        )
+    lines.append("")
+
+    # IOC 详细列表（合并，来源列引用上表序号）
+    if all_rows:
+        lines.append("## IOC 详细列表")
+        lines.append("| 序号 | 来源 | IOC类型 | IOC值 | 分类结果 | 标签 | 判断依据 |")
+        lines.append("|------|------|---------|-------|----------|------|----------|")
+        for idx, (si, ioc, verdict) in enumerate(all_rows, 1):
+            ioc_type_display = _IOC_TYPE_LABEL.get(
+                ioc.get("type", ""), ioc.get("type", "")
+            )
+            classification = _map_classification(verdict)
+            label = ioc.get("label", "") or _map_to_label(ioc)
+            reason = ioc.get("reason", "")
+            lines.append(
+                f"| {idx} | #{si} | {ioc_type_display} | {ioc.get('value','')} "
+                f"| {classification} | {label} | {reason} |"
+            )
+        lines.append("")
+
+    # 失败 URL 详情
+    if failed:
+        lines.append("## 失败 URL")
+        for c in failed:
+            lines.append(f"- {c.url}: {c.metadata.get('batch_error')}")
+        lines.append("")
+
+    md_text = "\n".join(lines)
+
+    json_obj = {
+        "batch_id": batch_id,
+        "generated_at": now.isoformat(),
+        "source_file": str(source_file),
+        "url_count": len(contexts),
+        "success_count": ok_count,
+        "failed_count": len(failed),
+        "summary": {
+            "total_extracted": total_extracted,
+            "total_filtered": total_filtered,
+            "total_malicious": total_mal,
+            "total_benign": total_ben,
+        },
+        "reports": [c.to_dict() for c in contexts],
+    }
+
+    _write_outputs("ioc_batch", batch_id, now, md_text, json_obj)
+    return md_text
 
 
 def run_interactive(skill_mgr: SkillManager):
@@ -362,6 +490,51 @@ def run_interactive(skill_mgr: SkillManager):
             print("\n⚠️  未生成报告，可能未提取到 IOC")
 
 
+def run_batch(url_file: str | Path):
+    """从 txt 文件批量分析 URL。
+
+    文件格式：每行一个 URL；空行与 # 开头的注释行会被忽略。
+    每个 URL 独立生成一份报告；单个 URL 失败不会中断整批。
+    """
+    path = Path(url_file)
+    if not path.exists():
+        logger.error(f"URL 文件不存在: {path}")
+        return
+
+    urls: list[str] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            urls.append(line)
+
+    if not urls:
+        logger.warning(f"文件 {path} 中没有可用的 URL")
+        return
+
+    total = len(urls)
+    logger.info(f"从 {path} 读取到 {total} 个 URL，开始批量分析")
+    contexts: list[Context] = []
+    success, failed = 0, 0
+    for idx, url in enumerate(urls, 1):
+        logger.info(f"═════ [{idx}/{total}] {url} ═════")
+        try:
+            ctx = run_pipeline(url=url, write_report=False)  # 只算不写
+            success += 1
+        except Exception as e:
+            failed += 1
+            logger.error(f"URL 分析失败 [{url}]: {e}")
+            ctx = Context()
+            ctx.url = url
+            ctx.metadata["batch_error"] = str(e)
+        contexts.append(ctx)
+
+    # 整批汇总为「一份 md + 一份 json」（以一次命令为单位）
+    generate_batch_report(contexts, str(path))
+    logger.success(f"批量分析完成：成功 {success} 个，失败 {failed} 个，共 {total} 个")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="IOC 识别 Agent - 自动化威胁指标提取与分析",
@@ -370,6 +543,10 @@ def main():
     )
     parser.add_argument("url", nargs="?", help="目标安全报告 URL")
     parser.add_argument("--text", "-t", help="直接输入文本内容")
+    parser.add_argument(
+        "--url-file", "-f",
+        help="从 txt 文件批量导入 URL（每行一个，空行/# 注释行忽略）",
+    )
     parser.add_argument(
         "--interactive", "-i",
         action="store_true",
@@ -398,13 +575,15 @@ def main():
     if args.interactive:
         skill_mgr, _ = init_agent()
         run_interactive(skill_mgr)
+    elif args.url_file:
+        run_batch(args.url_file)
     elif args.url:
         run_pipeline(url=args.url)
     elif args.text:
         run_pipeline(text=args.text)
     else:
         parser.print_help()
-        print("\n请提供 URL、--text 参数，或使用 --interactive 进入交互模式")
+        print("\n请提供 URL、--text、--url-file 参数，或使用 --interactive 进入交互模式")
 
 
 if __name__ == "__main__":
