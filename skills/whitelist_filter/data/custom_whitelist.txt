@@ -1,0 +1,11 @@
+# 自定义白名单域名列表
+# 每行一个域名，支持子域名匹配
+# 以 # 开头的行为注释
+
+# 内部系统
+internal.company.com
+corp.vpn.com
+
+# 已知安全研究站点
+research.nsfocus.com
+blog.venustech.com
