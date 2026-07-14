@@ -650,7 +650,7 @@ def main():
     load_env_settings(args.env)
     setup_logging(args.log_level or os.getenv("LOG_LEVEL", "INFO"))
 
-    logger.info("IOC 识别 Agent 启动")
+    logger.info("IOC Detector Agent 启动")
 
     if args.delete:
         run_delete(args.before)
