@@ -75,7 +75,9 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
 #### 第 1 层：交互演示层
 
 - **CLI 模式**：`python main.py <url>` 或 `python main.py --text "内容"`
+- **批量模式**：`python main.py -f urls.txt`，从 txt 文件批量分析并汇总为一份报告
 - **交互模式**：`python main.py --interactive`，支持循环输入和技能查看
+- **清理命令**：`python main.py -d [-t YYYYMMDD]`，删除输出（可按日期截止）
 - 适用场景：命令行快速分析、集成到安全运营流水线
 
 #### 第 2 层：Harness 框架层
@@ -310,18 +312,53 @@ python main.py --interactive
 
 # 示例 4：指定 API Key 启动
 LLM_API_KEY=sk-xxx python main.py --text "分析这段文本的IOC"
+
+# 示例 5：从 txt 文件批量分析 URL（每行一个，空行/# 注释行忽略）
+#         整批只汇总为「一份 md + 一份 json」
+python main.py --url-file urls.txt
+python main.py -f urls.txt
+
+# 示例 6：清理输出
+python main.py -d                 # 删除 output 下 md/json/log 的所有内容（保留三个文件夹）
+python main.py -d -t 20260715     # 只删除 2026-07-15（含）及以前的输出
+```
+
+> **参数说明**
+> - `-f` / `--url-file`：批量导入 URL 文件。
+> - `-d` / `--delete`：清空输出；可选 `-t YYYYMMDD` / `--before` 指定截止日期（含当天）。
+> - 注意：`--text` 只保留长参数形式（短参数 `-t` 已改作删除命令的日期参数）。
+
+`urls.txt` 示例：
+
+```text
+https://example.com/threat-report-1
+# 这一行是注释，会被忽略
+https://example.com/threat-report-2
 ```
 
 ### 4.5 输出示例
 
-**Markdown 报告**（`output/ioc_report_xxxx.md`）：
+**输出目录结构**：报告按「类型 / 年.月」归档，文件名带精确到秒的时间戳与会话 ID。
+
+```text
+output/
+├── md/2026.7/    ioc_report_20260714_143022_64eeab1eb5bc.md    # 单次分析报告
+│                 ioc_batch_20260714_150000_2c5633d9aa84.md     # 批量（-f）汇总报告
+├── json/2026.7/  ioc_report_20260714_143022_64eeab1eb5bc.json
+└── log/2026.7/   ioc_agent_2026-07-14.log                      # 运行日志
+```
+
+- 单次分析（URL / 文本）：文件名前缀 `ioc_report_`。
+- 批量分析（`-f`）：整批汇总为一份，前缀 `ioc_batch_`，含 URL 概览、合并 IOC 总表与失败清单。
+
+**Markdown 报告**（`output/md/年.月/ioc_report_xxxx.md`）：
 
 ```markdown
 # IOC 识别分析报告
 
-**生成时间**: 2026-07-10 11:47:13
+**生成时间**: 2026-07-14 14:30:22
 **来源**: 直接输入
-**会话 ID**: c07fb8e0e908
+**会话 ID**: 64eeab1eb5bc
 
 ## 统计摘要
 | 指标 | 数量 |
