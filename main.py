@@ -16,12 +16,13 @@ IOC 识别 Agent - 入口
 from __future__ import annotations
 
 import os
+import re
 import sys
 import json
 import uuid
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 
 from loguru import logger
 
@@ -535,6 +536,75 @@ def run_batch(url_file: str | Path):
     logger.success(f"批量分析完成：成功 {success} 个，失败 {failed} 个，共 {total} 个")
 
 
+# 从文件名中提取日期：匹配 20260714 或 2026-07-14 两种写法
+_FILE_DATE_RE = re.compile(r"(\d{4})-?(\d{2})-?(\d{2})")
+
+
+def _extract_file_date(name: str) -> date | None:
+    """从文件名解析出日期（取第一个日期样式）。解析不出返回 None。"""
+    m = _FILE_DATE_RE.search(name)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def _remove_empty_subdirs(top: Path):
+    """自底向上删除 top 下的空子目录，保留 top 本身。"""
+    for p in sorted(top.rglob("*"), reverse=True):
+        if p.is_dir():
+            try:
+                p.rmdir()          # 仅当目录为空时成功
+            except OSError:
+                pass
+
+
+def run_delete(before: str | None = None):
+    """删除 output 下 md/json/log 三个文件夹中的内容（保留这三个文件夹本身）。
+
+    before 为 None 时删除全部；否则仅删除该日期（含）及以前的文件，
+    日期取自文件名（如 ioc_report_20260714_...、ioc_agent_2026-07-14.log）。
+    """
+    cutoff: date | None = None
+    if before:
+        try:
+            cutoff = datetime.strptime(before, "%Y%m%d").date()
+        except ValueError:
+            logger.error(f"-t 日期格式错误：{before!r}，应为 YYYYMMDD，例如 20260715")
+            return
+
+    base_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
+    deleted = skipped = 0
+
+    for sub in ("md", "json", "log"):
+        d = base_dir / sub
+        if not d.exists():
+            continue                       # 文件夹不存在则跳过
+        for f in sorted(d.rglob("*")):
+            if not f.is_file():
+                continue
+            if cutoff is not None:
+                fdate = _extract_file_date(f.name)
+                # 无法判断日期、或晚于截止日 → 保留
+                if fdate is None or fdate > cutoff:
+                    continue
+            try:
+                f.unlink()
+                deleted += 1
+            except OSError as e:
+                skipped += 1               # 例如当前正在写入的日志文件被占用
+                logger.warning(f"无法删除 {f}: {e}")
+        _remove_empty_subdirs(d)
+
+    scope = f"（{before} 及以前）" if before else "（全部）"
+    msg = f"删除完成{scope}，共删除 {deleted} 个文件"
+    if skipped:
+        msg += f"，跳过 {skipped} 个（占用/无权限）"
+    logger.success(msg)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="IOC 识别 Agent - 自动化威胁指标提取与分析",
@@ -542,10 +612,20 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument("url", nargs="?", help="目标安全报告 URL")
-    parser.add_argument("--text", "-t", help="直接输入文本内容")
+    parser.add_argument("--text", help="直接输入文本内容")
     parser.add_argument(
         "--url-file", "-f",
         help="从 txt 文件批量导入 URL（每行一个，空行/# 注释行忽略）",
+    )
+    parser.add_argument(
+        "--delete", "-d",
+        action="store_true",
+        help="删除 output 下 md/json/log 中的所有内容（保留三个文件夹本身）",
+    )
+    parser.add_argument(
+        "--before", "-t",
+        metavar="YYYYMMDD",
+        help="配合 -d：仅删除该日期（含）及以前的输出，例如 -d -t 20260715",
     )
     parser.add_argument(
         "--interactive", "-i",
@@ -572,7 +652,12 @@ def main():
 
     logger.info("IOC 识别 Agent 启动")
 
-    if args.interactive:
+    if args.delete:
+        run_delete(args.before)
+    elif args.before:
+        logger.warning("-t/--before 需配合 -d/--delete 使用，已忽略")
+        parser.print_help()
+    elif args.interactive:
         skill_mgr, _ = init_agent()
         run_interactive(skill_mgr)
     elif args.url_file:
