@@ -76,16 +76,4 @@ class SkillManager:
         if isinstance(mod_info, SkillInfo) and callable(mod_execute):
             # 将模块本身作为 skill 对象（info + execute 属性）
             return mod
-
-        # 方式 2：类实例模式（info 作为实例属性）
-        for attr_name in dir(mod):
-            attr = getattr(mod, attr_name)
-            if isinstance(attr, type):
-                continue
-            if hasattr(attr, "info") and isinstance(getattr(attr, "info", None), SkillInfo):
-                return attr
-            if hasattr(attr, "execute") and callable(attr.execute):
-                info = getattr(attr, "info", None)
-                if isinstance(info, SkillInfo):
-                    return attr
         return None

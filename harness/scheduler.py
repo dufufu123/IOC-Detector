@@ -27,21 +27,3 @@ class Scheduler:
             logger.error(f"Skill '{skill_name}' failed: {e}")
             ctx.fail_skill(record, str(e))
             raise
-
-    def pipeline(self, ctx: Context, plan: list[dict[str, Any]]) -> dict[str, Any]:
-        results = {}
-        for step in plan:
-            name = step["skill"]
-            params = {k: v for k, v in step.items() if k != "skill"}
-            fallback = step.get("fallback", None)
-            try:
-                results[name] = self.run_skill(ctx, name, **params)
-            except Exception as e:
-                if fallback:
-                    logger.warning(f"Skill '{name}' failed, using fallback: {fallback}")
-                    fb_name = fallback.get("skill")
-                    fb_params = {k: v for k, v in fallback.items() if k != "skill"}
-                    results[name] = self.run_skill(ctx, fb_name, **fb_params)
-                else:
-                    results[name] = {"error": str(e)}
-        return results
