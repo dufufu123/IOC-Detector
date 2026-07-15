@@ -54,18 +54,26 @@ def execute(
 
 def _query_virustotal(ioc_type: str, ioc_value: str, api_key: str) -> dict:
     import requests
+    import base64
 
-    # 根据 IOC 类型映射 VT 的 URL
+    # 各 IOC 类型对应的 VT v3 endpoint
     type_map = {
         "ipv4": "ip_addresses",
         "domain": "domains",
-        "url": "urls",
         "md5": "files",
         "sha1": "files",
         "sha256": "files",
     }
-    endpoint = type_map.get(ioc_type, "ip_addresses")
-    url = f"https://www.virustotal.com/api/v3/{endpoint}/{ioc_value}"
+
+    # URL 类型不能直接把原始 URL 拼进路径（其中的 :// / 会破坏路径，VT 也识别不了）。
+    # VT v3 要求用 base64url（去尾部 =）作为 URL 的标识。
+    if ioc_type == "url":
+        url_id = base64.urlsafe_b64encode(ioc_value.encode()).decode().rstrip("=")
+        url = f"https://www.virustotal.com/api/v3/urls/{url_id}"
+    else:
+        endpoint = type_map.get(ioc_type, "ip_addresses")
+        url = f"https://www.virustotal.com/api/v3/{endpoint}/{ioc_value}"
+
     headers = {"x-apikey": api_key, "Accept": "application/json"}
 
     try:
@@ -117,18 +125,25 @@ def _query_virustotal(ioc_type: str, ioc_value: str, api_key: str) -> dict:
 
 def _query_otx(ioc_type: str, ioc_value: str, api_key: str) -> dict:
     import requests
+    import urllib.parse
 
     type_map = {
         "ipv4": "IPv4",
         "domain": "domain",
-        "url": "url",
         "md5": "file",
         "sha1": "file",
         "sha256": "file",
         "email": "email",
     }
-    otx_type = type_map.get(ioc_type, "IPv4")
-    url = f"https://otx.alienvault.com/api/v1/indicators/{otx_type}/{ioc_value}/general"
+
+    # URL 类型不能直接把原始 URL 拼进路径（其中的 :// / 会破坏路径）。
+    # OTX 要求对 URL 做 percent-encoding。
+    if ioc_type == "url":
+        encoded = urllib.parse.quote(ioc_value, safe="")
+        url = f"https://otx.alienvault.com/api/v1/indicators/url/{encoded}/general"
+    else:
+        otx_type = type_map.get(ioc_type, "IPv4")
+        url = f"https://otx.alienvault.com/api/v1/indicators/{otx_type}/{ioc_value}/general"
     headers = {"x-otx-api-key": api_key}
 
     try:
