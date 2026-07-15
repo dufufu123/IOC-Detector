@@ -66,3 +66,4 @@ htmlcov/
 *.tmp
 *.temp
 CLAUDE.md
+data/input/

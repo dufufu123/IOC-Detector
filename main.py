@@ -4,12 +4,13 @@ IOC 识别 Agent - 入口
 
 支持两种运行模式：
 1. CLI 模式：python main.py <url>
-2. 交互模式：python main.py --interactive
+2. 交互模式：python main.py --interactive（或不带参数，默认进入）
 
 用法:
   python main.py https://example.com/threat-report
   python main.py --text "检测到恶意IP 192.168.1.1 连接C2服务器"
   python main.py --url-file urls.txt
+  python main.py                       # 默认进入交互模式
   python main.py --interactive
 """
 
@@ -450,11 +451,29 @@ def generate_batch_report(contexts: list[Context], source_file: str):
     return md_text
 
 
+def _print_banner():
+    """打印 data/banner.txt 中的字符画；文件缺失时退化为纯文字标题。"""
+    banner_path = Path(__file__).parent / "data" / "banner.txt"
+    if banner_path.exists():
+        print(banner_path.read_text(encoding="utf-8"), end="")
+    else:
+        print("IOC Detector Agent")
+
+
+def _resolve_data_path(filename: str) -> Path:
+    """解析文件路径：仅有文件名（无目录部分）时默认从 data/ 目录查找，否则按原路径使用。"""
+    p = Path(filename)
+    if p.parent == Path("."):
+        return Path(__file__).parent / "data" / "input" /filename
+    return p
+
+
 def run_interactive(skill_mgr: SkillManager):
     """交互式 IOC 分析。"""
-    print("\n🧠 IOC 识别 Agent (交互模式)")
+    _print_banner()
     print("=" * 50)
     print("输入 URL 或直接粘贴文本进行分析")
+    print("输入 'file <文件名或路径>' 批量分析 URL（仅文件名默认从 data/ 查找）")
     print("输入 'exit' 退出")
     print("输入 'skills' 查看可用 Skill")
     print("=" * 50)
@@ -476,6 +495,17 @@ def run_interactive(skill_mgr: SkillManager):
             for name in skill_mgr.list_skills():
                 info = skill_mgr.get_skill(name).info
                 print(f"  - {name}: {info.description}")
+            continue
+
+        # 批量分析：file <文件名或路径>
+        low = inp.lower()
+        if low == "file" or low.startswith("file "):
+            parts = inp.split(maxsplit=1)
+            if len(parts) < 2 or not parts[1].strip():
+                print("用法: file <文件名或路径>  （仅文件名时默认从 data/ 目录查找）")
+                continue
+            file_path = _resolve_data_path(parts[1].strip())
+            run_batch(file_path)
             continue
 
         if inp.startswith("http://") or inp.startswith("https://"):
@@ -667,8 +697,9 @@ def main():
     elif args.text:
         run_pipeline(text=args.text)
     else:
-        parser.print_help()
-        print("\n请提供 URL、--text、--url-file 参数，或使用 --interactive 进入交互模式")
+        # 无参数默认进入交互模式
+        skill_mgr, _ = init_agent()
+        run_interactive(skill_mgr)
 
 
 if __name__ == "__main__":

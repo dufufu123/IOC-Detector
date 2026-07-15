@@ -304,9 +304,12 @@ python main.py --text "检测到恶意C2服务器 192.168.1.100 连接域名 evi
 # 示例 2：分析安全报告 URL
 python main.py https://blog.nsfocus.net/threat-report-example
 
-# 示例 3：交互模式
+# 示例 3：交互模式（不带参数也默认进入）
+python main.py
 python main.py --interactive
 > https://example.com/report
+> file urls.txt              # 交互中批量分析 URL 文件（仅文件名默认从 data/ 查找）
+> file /abs/path/urls.txt    # 也可用绝对/相对路径
 > 输入 'exit' 退出
 > 输入 'skills' 查看可用 Skill
 
@@ -326,6 +329,7 @@ python main.py -d -t 20260715     # 只删除 2026-07-15（含）及以前的输
 > **参数说明**
 > - `-f` / `--url-file`：批量导入 URL 文件。
 > - `-d` / `--delete`：清空输出；可选 `-t YYYYMMDD` / `--before` 指定截止日期（含当天）。
+> - 交互模式中输入 `file <文件名或路径>` 也可批量分析：仅文件名时默认从 `data/` 目录查找，带目录或绝对路径则按原路径。
 > - 注意：`--text` 只保留长参数形式（短参数 `-t` 已改作删除命令的日期参数）。
 
 `urls.txt` 示例：
