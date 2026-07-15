@@ -23,7 +23,7 @@ from pathlib import Path
 from loguru import logger
 
 from harness import SkillManager, Scheduler, Context
-from tools.report import generate_report, generate_batch_report
+from tools.report import generate_report, generate_batch_report, url_batch_status
 from tools.delete import run_delete
 from tools.utils import setup_logging, load_env_settings, _print_banner, _resolve_data_path
 
@@ -42,7 +42,7 @@ def init_agent() -> tuple[SkillManager, Scheduler]:
     else:
         logger.info(f"Discovered {len(discovered)} skills:")
         for s in discovered:
-            logger.info(f"  ✅ {s.name}: {s.description}")
+            logger.info(f"{s.name}: {s.description}")
 
     scheduler = Scheduler(skill_mgr)
     return skill_mgr, scheduler
@@ -227,14 +227,11 @@ def run_batch(url_file: str | Path):
     total = len(urls)
     logger.info(f"从 {path} 读取到 {total} 个 URL，开始批量分析")
     contexts: list[Context] = []
-    success, failed = 0, 0
     for idx, url in enumerate(urls, 1):
         logger.info(f"═════ [{idx}/{total}] {url} ═════")
         try:
             ctx = run_pipeline(url=url, write_report=False)  # 只算不写
-            success += 1
         except Exception as e:
-            failed += 1
             logger.error(f"URL 分析失败 [{url}]: {e}")
             ctx = Context()
             ctx.url = url
@@ -243,7 +240,14 @@ def run_batch(url_file: str | Path):
 
     # 整批汇总为「一份 md + 一份 json」（以一次命令为单位）
     generate_batch_report(contexts, str(path))
-    logger.success(f"批量分析完成：成功 {success} 个，失败 {failed} 个，共 {total} 个")
+    # 统计：成功 / 未提取（过滤后为0）/ 访问失败（与报告口径一致）
+    cnt = {"success": 0, "no_ioc": 0, "access_failed": 0}
+    for c in contexts:
+        cnt[url_batch_status(c)[0]] += 1
+    logger.success(
+        f"批量分析完成：成功 {cnt['success']}，未提取 {cnt['no_ioc']}，"
+        f"访问失败 {cnt['access_failed']}，共 {total} 个"
+    )
 
 
 def main():

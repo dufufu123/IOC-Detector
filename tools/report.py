@@ -177,6 +177,28 @@ def _write_outputs(stem_prefix: str, session_id: str, now: datetime,
 _VERDICT_ORDER = {"malicious": 0, "suspicious": 1, "benign": 2}
 
 
+# 批量报告中 URL 的状态：key -> 显示标签
+URL_STATUS_LABEL = {
+    "success": "✅ 成功",
+    "no_ioc": "⚠️ 未提取",
+    "access_failed": "❌ 访问失败",
+}
+
+
+def url_batch_status(c: Context) -> tuple[str, str]:
+    """判定单个 URL 在批量报告中的状态，返回 (状态 key, 备注)。
+
+    - access_failed: 无法访问（抓取异常，batch_error 已记录）
+    - no_ioc:        可访问，但白名单过滤后可疑 IOC 为 0
+    - success:       有可疑 IOC，正常完成分析
+    """
+    if c.metadata.get("batch_error"):
+        return "access_failed", c.metadata["batch_error"]
+    if not c.filtered_iocs:
+        return "no_ioc", ""
+    return "success", ""
+
+
 def generate_batch_report(contexts: list[Context], source_file: str):
     """把整批 URL 的分析结果汇总成「一份 md + 一份 json」。"""
     now = datetime.now()
@@ -196,15 +218,20 @@ def generate_batch_report(contexts: list[Context], source_file: str):
     total_filtered = sum(len(c.filtered_iocs) for c in contexts)
     total_mal = sum(1 for _, _, v in all_rows if v in ("malicious", "suspicious"))
     total_ben = sum(1 for _, _, v in all_rows if v == "benign")
-    failed = [c for c in contexts if c.metadata.get("batch_error")]
-    ok_count = len(contexts) - len(failed)
+    statuses = [url_batch_status(c) for c in contexts]
+    counts = {"success": 0, "no_ioc": 0, "access_failed": 0}
+    for key, _ in statuses:
+        counts[key] += 1
 
     lines = []
     lines.append("# IOC 批量识别分析报告")
     lines.append(f"\n**生成时间**: {now.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"**来源文件**: {source_file}")
     lines.append(f"**批次 ID**: {batch_id}")
-    lines.append(f"**分析 URL 数**: {len(contexts)}（成功 {ok_count}，失败 {len(failed)}）")
+    lines.append(
+        f"**分析 URL 数**: {len(contexts)}"
+        f"（成功 {counts['success']}，未提取 {counts['no_ioc']}，访问失败 {counts['access_failed']}）"
+    )
     lines.append("")
 
     # 统计摘要
@@ -227,7 +254,8 @@ def generate_batch_report(contexts: list[Context], source_file: str):
             1 for i in c.analyzed_iocs
             if i.get("malicious") in ("malicious", "suspicious")
         )
-        status = "❌ 失败" if c.metadata.get("batch_error") else "✅"
+        key, _ = statuses[si - 1]
+        status = URL_STATUS_LABEL[key]
         lines.append(
             f"| {si} | {c.url} | {len(c.extracted_iocs)} "
             f"| {len(c.filtered_iocs)} | {mal_c} | {status} |"
@@ -252,11 +280,20 @@ def generate_batch_report(contexts: list[Context], source_file: str):
             )
         lines.append("")
 
-    # 失败 URL 详情
-    if failed:
-        lines.append("## 失败 URL")
-        for c in failed:
-            lines.append(f"- {c.url}: {c.metadata.get('batch_error')}")
+    # 访问失败 URL
+    failed_urls = [(c, r) for c, (k, r) in zip(contexts, statuses) if k == "access_failed"]
+    if failed_urls:
+        lines.append("## 访问失败 URL")
+        for c, reason in failed_urls:
+            lines.append(f"- {c.url}: {reason}")
+        lines.append("")
+
+    # 未提取 URL（白名单过滤后无可疑 IOC）
+    no_ioc_urls = [c for c, (k, _) in zip(contexts, statuses) if k == "no_ioc"]
+    if no_ioc_urls:
+        lines.append("## 未提取 URL（白名单过滤后无可疑 IOC）")
+        for c in no_ioc_urls:
+            lines.append(f"- {c.url}")
         lines.append("")
 
     md_text = "\n".join(lines)
@@ -266,8 +303,9 @@ def generate_batch_report(contexts: list[Context], source_file: str):
         "generated_at": now.isoformat(),
         "source_file": str(source_file),
         "url_count": len(contexts),
-        "success_count": ok_count,
-        "failed_count": len(failed),
+        "success_count": counts["success"],
+        "no_ioc_count": counts["no_ioc"],
+        "access_failed_count": counts["access_failed"],
         "summary": {
             "total_extracted": total_extracted,
             "total_filtered": total_filtered,
