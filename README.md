@@ -135,7 +135,7 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
 | 注册表项        | 匹配 `HKEY_*` 开头的注册表路径                          |
 | 邮箱            | 标准 email 格式匹配                                     |
 
-- **上下文提取**：每个 IOC 自动附带前后 2 句话作为上下文
+- **上下文提取**：每个 IOC 自动附带前后各 2 句作为上下文；若切分结果过长（> 1500 字符，常见于无标点的纯哈希列表），回退为按行取前后各 3 行
 - **去重**：同一 IOC 多次出现时合并，记录出现频次
 
 ##### 4.3 whitelist_filter — 白名单过滤 Skill
@@ -163,11 +163,13 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
 ##### 4.5 threat_intel — 威胁情报查询 Skill
 
 - **输入**：IOC 列表
-- **支持源**：
-  - VirusTotal（`vt`）：查询文件/域名/IP 的引擎检测结果
+- **支持源**（`source` 由 `main.py` 按 `VT_API_KEY`/`OTX_API_KEY` 谁存在自动选择，VT 优先）：
+  - VirusTotal（`vt`）：查询文件/域名/IP/URL 的引擎检测结果
   - AlienVault OTX（`otx`）：查询 Pulse 关联信息
-  - 可扩展：微步在线等国内情报源
-- **无 Key 模式**：返回 mock 结果，标明未配置情报源
+- **URL 类型特殊处理**：不能直接把原始 URL 拼进 API 路径（`://` 会破坏路径）。VT v3 用 base64url（去尾部 `=`）作 URL 标识，OTX 对 URL 做 percent-encoding。
+- **Key 解析**：`execute()` 按 `source` 读对应的 `VT_API_KEY`/`OTX_API_KEY`（旧版无脑读 VT_API_KEY，导致只配 OTX 时误走 mock，已修复）。
+- **无 Key 模式**：对应平台 key 缺失时返回 mock 结果。
+- **微步在线**：`config/settings.env` 的 `MICROSTEP_API_KEY` 为预留项，当前未接线（threat_intel 只支持 vt/otx）。
 
 #### 第 5 层：LLM 模型层
 
@@ -291,6 +293,7 @@ LLM_API_BASE=https://api.deepseek.com  # API 地址
 # 威胁情报配置（可选）
 VT_API_KEY=                        # VirusTotal API Key
 OTX_API_KEY=                       # AlienVault OTX API Key
+MICROSTEP_API_KEY=                 # 微步在线 API Key（预留，当前未接线）
 
 # 运行配置
 OUTPUT_DIR=./output                # 输出目录
@@ -355,7 +358,7 @@ output/
 ```
 
 - 单次分析（URL / 文本）：文件名前缀 `ioc_report_`。
-- 批量分析（`-f`）：整批汇总为一份，前缀 `ioc_batch_`，含 URL 概览、合并 IOC 总表与失败清单。
+- 批量分析（`-f`）：整批汇总为一份，前缀 `ioc_batch_`，含 URL 概览（三态标注：✅ 成功 / ⚠️ 未提取 / ❌ 访问失败）、合并 IOC 总表，以及「访问失败 URL」「未提取 URL」两段详情。
 
 **Markdown 报告**（`output/md/年.月/ioc_report_xxxx.md`）：
 
@@ -480,4 +483,4 @@ def execute(param1: str, **kwargs) -> dict:
 
 ---
 
-*文档版本：v1.0 | 最后更新：2026-07-10*
+*文档版本：v1.1 | 最后更新：2026-07-15*
