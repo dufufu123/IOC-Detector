@@ -22,7 +22,10 @@ def execute(
     **kwargs,
 ) -> dict[str, Any]:
     """查询外部威胁情报。"""
-    api_key = api_key or os.getenv("VT_API_KEY", "")
+    # 按 source 取对应平台的 API Key，避免「配了 OTX 却读 VT 的 key」导致误走 mock
+    if not api_key:
+        env_var = "VT_API_KEY" if source == "vt" else "OTX_API_KEY"
+        api_key = os.getenv(env_var, "")
 
     if not api_key:
         return _mock_query(iocs, source)
