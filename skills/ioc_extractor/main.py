@@ -70,8 +70,29 @@ IPV6_PATTERN = re.compile(
 )
 
 
+# 上下文长度上限：超过则视为句子切分失效（如无标点的纯哈希列表），
+# 回退为按行取前后 LINE_CONTEXT_WINDOW 行。
+# 定 1500 是为放过「切分成功但本就偏大」的合法上下文--例如 sha512
+# (128 字符) 带 5 个 window 的正常上下文约 1000+ 字符，不应被降级。
+MAX_CONTEXT_CHARS = 800
+LINE_CONTEXT_WINDOW = 3
+
+
 def _get_context(text: str, pos: int, window: int = 2) -> str:
-    """获取 IOC 前后各 window 句的上下文。"""
+    """获取 IOC 前后各 window 句的上下文。
+
+    先按句末标点切分取前后 window 句；若结果过长（> MAX_CONTEXT_CHARS，
+    常见于无标点的纯列表/哈希串——会把整篇正文都当成上下文），改按行切分，
+    取 IOC 所在行前后各 LINE_CONTEXT_WINDOW 行。
+    """
+    context = _get_context_by_sentence(text, pos, window)
+    if len(context) <= MAX_CONTEXT_CHARS:
+        return context
+    return _get_context_by_line(text, pos, LINE_CONTEXT_WINDOW)
+
+
+def _get_context_by_sentence(text: str, pos: int, window: int) -> str:
+    """按句末标点切分，取 IOC 所在句前后各 window 句。"""
     sentences = re.split(r'(?<=[。！？.!?])\s*', text)
     char_count = 0
     target_sentence_idx = -1
@@ -83,6 +104,19 @@ def _get_context(text: str, pos: int, window: int = 2) -> str:
     start = max(0, target_sentence_idx - window)
     end = min(len(sentences), target_sentence_idx + window + 1)
     return "".join(sentences[start:end]).strip()
+
+
+def _get_context_by_line(text: str, pos: int, window: int) -> str:
+    """按行切分，取 IOC 所在行前后各 window 行（句子切分失效时的回退策略）。"""
+    lines = text.split("\n")
+    if not lines:
+        return text.strip()
+    # pos 之前的换行符个数即所在行索引（对 \n / \r\n 均准确）
+    line_idx = min(text.count("\n", 0, pos), len(lines) - 1)
+    start = max(0, line_idx - window)
+    end = min(len(lines), line_idx + window + 1)
+    # 去除 \r\n 残留的 \r
+    return "\n".join(line.rstrip("\r") for line in lines[start:end]).strip()
 
 
 def _deduplicate(iocs: list[dict]) -> list[dict]:
