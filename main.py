@@ -150,7 +150,7 @@ def run_pipeline(url: str | None = None, text: str | None = None,
 
 def run_interactive(skill_mgr: SkillManager):
     """交互式 IOC 分析。"""
-    _print_banner()
+
     print("=" * 50)
     print("输入 URL 或直接粘贴文本进行分析")
     print("输入 'file <文件名或路径>' 批量分析 URL（仅文件名默认从 data/ 查找）")
@@ -299,6 +299,7 @@ def main():
         logger.warning("-t/--before 需配合 -d/--delete 使用，已忽略")
         parser.print_help()
     elif args.interactive:
+        _print_banner()
         skill_mgr, _ = init_agent()
         run_interactive(skill_mgr)
     elif args.url_file:
@@ -309,6 +310,7 @@ def main():
         run_pipeline(text=args.text)
     else:
         # 无参数默认进入交互模式
+        _print_banner()
         skill_mgr, _ = init_agent()
         run_interactive(skill_mgr)
 

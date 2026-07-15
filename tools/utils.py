@@ -46,12 +46,14 @@ def load_env_settings(env_path: str | Path = "config/settings.env"):
 
 
 def _print_banner():
+    print("\n" * 1)
     """打印 data/banner.txt 中的字符画；文件缺失时退化为纯文字标题。"""
     banner_path = _PROJECT_ROOT / "data" / "banner.txt"
     if banner_path.exists():
         print(banner_path.read_text(encoding="utf-8"), end="")
     else:
         print("IOC Detector Agent")
+    print("\n" * 2)
 
 
 def _resolve_data_path(filename: str) -> Path:
