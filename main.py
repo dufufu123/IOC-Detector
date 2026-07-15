@@ -592,10 +592,10 @@ def _remove_empty_subdirs(top: Path):
 
 
 def run_delete(before: str | None = None):
-    """删除 output 下 md/json/log 三个文件夹中的内容（保留这三个文件夹本身）。
+    """删除 output 下 md/json 报告（保留日志，日志由 loguru 自动滚动清理）。
 
     before 为 None 时删除全部；否则仅删除该日期（含）及以前的文件，
-    日期取自文件名（如 ioc_report_20260714_...、ioc_agent_2026-07-14.log）。
+    日期取自文件名（如 ioc_report_20260714_...、ioc_batch_...）。
     """
     cutoff: date | None = None
     if before:
@@ -608,7 +608,7 @@ def run_delete(before: str | None = None):
     base_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
     deleted = skipped = 0
 
-    for sub in ("md", "json", "log"):
+    for sub in ("md", "json"):
         d = base_dir / sub
         if not d.exists():
             continue                       # 文件夹不存在则跳过
@@ -624,12 +624,12 @@ def run_delete(before: str | None = None):
                 f.unlink()
                 deleted += 1
             except OSError as e:
-                skipped += 1               # 例如当前正在写入的日志文件被占用
+                skipped += 1               # 例如占用/无权限
                 logger.warning(f"无法删除 {f}: {e}")
         _remove_empty_subdirs(d)
 
     scope = f"（{before} 及以前）" if before else "（全部）"
-    msg = f"删除完成{scope}，共删除 {deleted} 个文件"
+    msg = f"删除完成{scope}，共删除 {deleted} 个报告文件"
     if skipped:
         msg += f"，跳过 {skipped} 个（占用/无权限）"
     logger.success(msg)
@@ -650,7 +650,7 @@ def main():
     parser.add_argument(
         "--delete", "-d",
         action="store_true",
-        help="删除 output 下 md/json/log 中的所有内容（保留三个文件夹本身）",
+        help="删除 output 下 md/json 报告（保留日志，日志自动滚动）",
     )
     parser.add_argument(
         "--before", "-t",

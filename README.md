@@ -322,8 +322,8 @@ python main.py --url-file urls.txt
 python main.py -f urls.txt
 
 # 示例 6：清理输出
-python main.py -d                 # 删除 output 下 md/json/log 的所有内容（保留三个文件夹）
-python main.py -d -t 20260715     # 只删除 2026-07-15（含）及以前的输出
+python main.py -d                 # 删除 output 下 md/json 报告（保留日志，日志自动滚动）
+python main.py -d -t 20260715     # 只删除 2026-07-15（含）及以前的报告
 ```
 
 > **参数说明**
