@@ -94,6 +94,8 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
 
 #### 第 3 层：Agent 逻辑层
 
+> **文件组织**：编排逻辑在 `main.py`（`run_pipeline` / `run_interactive` / `run_batch` / `main`）；报告生成、输出清理、启动配置等工具方法抽离到 `tools/` 包——`tools/report.py`（单条 + 批量报告、文件落盘）、`tools/delete.py`（`-d` 输出清理）、`tools/utils.py`（日志、env、banner、`data/` 路径解析）。`tools/*` 只依赖标准库/loguru/harness，不反向依赖 `main.py`，无循环依赖。
+
 负责编排所有 Skill 完成端到端任务，采用 **Plan-and-Execute** 模式：
 
 ```
