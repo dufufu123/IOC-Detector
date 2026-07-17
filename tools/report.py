@@ -147,6 +147,148 @@ def generate_report(ctx: Context, write: bool = True):
 
     if write:
         _write_outputs("ioc_report", ctx.session_id, now, ctx.final_report, ctx.to_dict())
+    if write:
+        _write_outputs("ioc_report", ctx.session_id, now, ctx.final_report, ctx.to_dict())
+        ask_export_format(ctx)   
+
+
+def generate_excel(ctx,output_dir: str = None):
+    """生成Ecxel报告,IOC按URL分组排序"""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+    from pathlib import Path
+    from datetime import datetime
+    import os
+
+    now = datetime.now()
+    # 创建一个新的工作簿
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "IOC分析报告"
+
+    # 定义样式
+    header_font = Font(bold=True, size=11)
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_font_white = Font(bold=True, size=11, color="FFFFFF")
+    thin_border = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'), bottom=Side(style='thin')
+    )
+    center_align = Alignment(horizontal='center', vertical='center')
+
+    # 写入表头
+    headers = ["来源url","序号", "IOC类型", "IOC值", "分类结果", "标签", "判断依据"]
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font_white
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = thin_border
+
+    # 去IOC数据并按恶意程度排序
+    iocs = ctx.analyzed_iocs if ctx.analyzed_iocs else ctx.filtered_iocs
+    order = {"malicious": 0, "suspicious": 1, "benign": 2,"unknown": 3}
+    iocs_sorted = sorted(iocs, key=lambda i: order.get(i.get("malicious"), 3))
+
+    ioc_type_map = {
+        "ipv4":"IP地址","ipv6":"IP地址","domain":"域名",
+        "url": "URL","md5":"MD5","sha1":"SHA1","sha256":"SHA256",
+        "filepath": "文件路径","email":"邮箱地址","registry": "注册表项",
+    }
+
+    # 逐行写入IOC
+    row = 2
+    for idx, ioc in enumerate(iocs_sorted, 1):
+        classification =  {
+            "malicious": "恶意IOC","suspicious": "恶意IOC","benign": "非恶意IOC"
+        }.get(ioc.get("malicious"), "待判定")
+
+        values = [
+            ctx.url or "直接输入",
+            idx,
+            ioc_type_map.get(ioc.get("type",""), ioc.get("type","")),
+            ioc.get("value",""),
+            classification,
+            ioc.get("label","") or _map_to_label(ioc),
+            ioc.get("reason",""),
+        ]
+        for col_idx, value in enumerate(values, 1):
+            cell = ws.cell(row=row, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical='center')
+        row += 1
+
+    # 保存文件
+    base_dir = Path(os.getenv("OUTPUT_DIR","./output"))
+    month_folder = f"{now.year}.{now.month}"
+    xlsx_dir = base_dir / "xlsx" / month_folder
+    xlsx_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    path = xlsx_dir / f"ioc_report_{timestamp}_{ctx.session_id}.xlsx"
+    wb.save(path)
+    print(f"✅ Excel报告已保存: {path}")
+    return str(path)
+
+
+def generate_csv(ctx, output_dir: str = None) -> str:
+    """生成 CSV 报告。"""
+    import csv
+    from pathlib import Path
+    from datetime import datetime
+    import os
+
+    now = datetime.now()
+    iocs = ctx.analyzed_iocs if ctx.analyzed_iocs else ctx.filtered_iocs
+    order = {"malicious": 0, "suspicious": 1, "benign": 2, "unknown": 3}
+    iocs_sorted = sorted(iocs, key=lambda i: order.get(i.get("malicious", ""), 3))
+
+    base_dir = Path(os.getenv("OUTPUT_DIR", "./output"))
+    month_folder = f"{now.year}.{now.month}"
+    csv_dir = base_dir / "csv" / month_folder
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    path = csv_dir / f"ioc_report_{timestamp}_{ctx.session_id}.csv"
+
+    with open(str(path), "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["URL来源", "序号", "IOC类型", "IOC值", "分类结果", "标签", "判断依据"])
+        for idx, ioc in enumerate(iocs_sorted, 1):
+            classification = {
+                "malicious": "恶意IOC", "suspicious": "恶意IOC", "benign": "非恶意IOC"
+            }.get(ioc.get("malicious", ""), "待判定")
+            writer.writerow([
+                ctx.url or "直接输入",
+                idx,
+                ioc.get("type", ""),
+                ioc.get("value", ""),
+                classification,
+                ioc.get("label", "") or _map_to_label(ioc),
+                ioc.get("reason", ""),
+            ])
+
+    print(f"✅ CSV报告已保存: {path}")
+    return str(path)
+
+
+def ask_export_format(ctx):
+    """交互选择输出格式。"""
+    print("\n" + "=" * 40)
+    print("选择额外输出格式：")
+    print("  1. Excel (.xlsx)")
+    print("  2. CSV (.csv)")
+    print("  3. Excel + CSV")
+    print("  4. 跳过（仅 Markdown + JSON）")
+    choice = input("请选择 (1-4，默认 4): ").strip() or "4"
+
+    if choice == "1":
+        generate_excel(ctx)
+    elif choice == "2":
+        generate_csv(ctx)
+    elif choice == "3":
+        generate_excel(ctx)
+        generate_csv(ctx)
+    else:
+        print("跳过额外输出。")
 
 
 def _write_outputs(stem_prefix: str, session_id: str, now: datetime,

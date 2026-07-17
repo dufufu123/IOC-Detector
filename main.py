@@ -329,6 +329,7 @@ def main():
         run_pipeline(text=args.text)
     elif args.file:
         text = read_local_file(args.file)
+        logger.info(f"读取本地文件: {args.file}，共 {len(text)} 字符")
         run_pipeline(text=text)
     else:
         # 无参数默认进入交互模式
