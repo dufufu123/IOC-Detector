@@ -25,7 +25,7 @@ from loguru import logger
 from harness import SkillManager, Scheduler, Context
 from tools.report import generate_report, generate_batch_report, url_batch_status
 from tools.delete import run_delete
-from tools.utils import setup_logging, load_env_settings, _print_banner, _resolve_data_path
+from tools.utils import setup_logging, load_env_settings, _print_banner, _resolve_data_path, read_local_file
 
 
 def init_agent() -> tuple[SkillManager, Scheduler]:
@@ -184,8 +184,18 @@ def run_interactive(skill_mgr: SkillManager):
             if len(parts) < 2 or not parts[1].strip():
                 print("用法: file <文件名或路径>  （仅文件名时默认从 data/ 目录查找）")
                 continue
+            from pathlib import Path
             file_path = _resolve_data_path(parts[1].strip())
-            run_batch(file_path)
+            suffix = Path(file_path).suffix.lower()
+
+            if suffix in ('.pdf','.docx','.xlsx','.md','.txt'):
+                try:
+                    text = read_local_file(file_path)
+                    run_pipeline(text=text)
+                except Exception as e:
+                    print(f"读取文件失败: {e}")
+            else:
+                run_batch(file_path)
             continue
 
         if inp.startswith("http://") or inp.startswith("https://"):
@@ -288,6 +298,11 @@ def main():
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="日志级别",
     )
+    parser.add_argument(
+        "--file",
+        help="读取本地文件提取IOC(支持PDF/DOCX/TXT/MD)"
+    )
+
 
     args = parser.parse_args()
 
@@ -312,6 +327,9 @@ def main():
         run_pipeline(url=args.url)
     elif args.text:
         run_pipeline(text=args.text)
+    elif args.file:
+        text = read_local_file(args.file)
+        run_pipeline(text=text)
     else:
         # 无参数默认进入交互模式
         _print_banner()
