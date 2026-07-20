@@ -2,7 +2,7 @@
 """IOC-Detector Web GUI —— Streamlit 白底专业主题"""
 
 from __future__ import annotations
-import sys, os, csv, json as _json
+import sys, os, csv
 from io import BytesIO, StringIO
 from pathlib import Path
 from datetime import datetime
