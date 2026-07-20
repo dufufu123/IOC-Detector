@@ -27,7 +27,7 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    交互演示层                             │
-│    CLI 命令行 (argparse)         交互模式 (input loop)     │
+│  launcher.py 启动选择器 -> GUI(Streamlit) 或 CLI 或 交互模式 │
 └───────────────────────┬─────────────────────────────────┘
                         │
 ┌───────────────────────▼─────────────────────────────────┐
@@ -74,6 +74,8 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
 
 #### 第 1 层：交互演示层
 
+- **启动选择器**：`python launcher.py`，自动发现 Skill 后交互选择 GUI 或终端模式（推荐）
+- **GUI 模式**：`streamlit run app.py` 或通过 launcher 选择，Web 可视化界面，4 种输入模式
 - **CLI 模式**：`python main.py <url>` 或 `python main.py --text "内容"`
 - **批量模式**：`python main.py -f urls.txt`，从 txt 文件批量分析并汇总为一份报告
 - **交互模式**：`python main.py --interactive`，支持循环输入和技能查看
@@ -99,6 +101,7 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
 负责编排所有 Skill 完成端到端任务。当前为**固定线性流水线**（步骤顺序硬编码在 `main.py::run_pipeline()`，无独立 Planner；Scheduler 仅执行单个 Skill + 记录历史 + 异常上抛）：
 
 ```
+步骤 0：GUI 启动     → gui（可选，Skill 外挂）
 步骤 1：网页抓取     → web_crawler
 步骤 2：IOC 提取     → ioc_extractor
 步骤 3：白名单过滤   → whitelist_filter
@@ -458,7 +461,8 @@ def execute(param1: str, **kwargs) -> dict:
 | 白名单   | ipaddress（标准库）                          | IP 段范围判断       |
 | LLM 接入 | openai SDK                                   | 大模型推理接口      |
 | 威胁情报 | requests + REST API                          | VirusTotal/OTX 查询 |
-| 演示界面 | argparse + 交互式 CLI                        | 用户交互            |
+| 演示界面 | argparse + 交互式 CLI                        | 终端用户交互          |
+| 演示界面 | Streamlit                                    | Web GUI 界面        |
 
 ---
 
@@ -479,9 +483,10 @@ def execute(param1: str, **kwargs) -> dict:
 ## 8. 路线图（后续可扩展方向）
 
 - **短期**：接入更多国内威胁情报源（微步在线、奇安信情报），完善正则覆盖（增加 Mutex、PipeName 等 Windows 指标）
-- **中期**：集成 LangGraph 增强 Agent 编排能力，增加 Web 演示界面（Streamlit/Gradio）
+- **中期**：集成 LangGraph 增强 Agent 编排能力，升级为真正的 AI Agent（LLM 决策循环）
+- **已完成**：Web GUI 可视化界面（Streamlit），通过 skills/gui/ Skill 外挂实现
 - **长期**：支持批量文件分析、定时抓取任务、记忆系统（ChromaDB 实现长期 IOC 关联分析）
 
 ---
 
-*文档版本：v1.1 | 最后更新：2026-07-15*
+*文档版本：v1.2 | 最后更新：2026-07-20*
