@@ -147,8 +147,6 @@ def generate_report(ctx: Context, write: bool = True):
 
     if write:
         _write_outputs("ioc_report", ctx.session_id, now, ctx.final_report, ctx.to_dict())
-    if write:
-        _write_outputs("ioc_report", ctx.session_id, now, ctx.final_report, ctx.to_dict())
         ask_export_format(ctx)   
 
 
