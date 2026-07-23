@@ -66,7 +66,7 @@ _IOC_TYPE_LABEL = {
 }
 
 
-def generate_report(ctx: Context, write: bool = True):
+def generate_report(ctx: Context, write: bool = True, ask_format: bool = True):
     """生成单条 IOC 分析报告。write=False 时只构建文本、不落盘（供批量模式复用）。"""
     now = datetime.now()
     malicious = [i for i in ctx.analyzed_iocs if i.get("malicious") == "malicious"]
@@ -147,7 +147,8 @@ def generate_report(ctx: Context, write: bool = True):
 
     if write:
         _write_outputs("ioc_report", ctx.session_id, now, ctx.final_report, ctx.to_dict())
-        ask_export_format(ctx)   
+        if ask_format:
+            ask_export_format(ctx)
 
 
 def generate_excel(ctx,output_dir: str = None):

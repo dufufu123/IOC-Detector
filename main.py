@@ -4,12 +4,14 @@ IOC 识别 Agent - 入口
 
 支持两种运行模式：
 1. CLI 模式：python main.py <url>
-2. 交互模式：python main.py --interactive（或不带参数，默认进入）
+2. 交互模式：python main.py --interactive（或不带参数，默认进入）`n3. Agent 模式：python main.py --agent
 
 用法:
   python main.py https://example.com/threat-report
   python main.py --text "检测到恶意IP 192.168.1.1 连接C2服务器"
   python main.py --url-file urls.txt
+  python main.py --agent              # Agent 对话模式
+
   python main.py                       # 默认进入交互模式
   python main.py --interactive
 """
@@ -252,7 +254,7 @@ def run_interactive(skill_mgr: SkillManager):
             if len(ctx.final_report) > 2000:
                 print(f"\n... (共 {len(ctx.final_report)} 字，完整报告见 output/ 目录)")
         else:
-            print("\n⚠️  未生成报告，可能未提取到 IOC")
+            print("\n[!]   未生成报告，可能未提取到 IOC")
 
 
 def run_batch(url_file: str | Path):
@@ -304,6 +306,72 @@ def run_batch(url_file: str | Path):
     )
 
 
+def run_agent(skill_mgr: SkillManager):
+    """AI Agent 对话模式。
+    
+    LLM 自动理解用户意图，选择合适的 Skill 完成 IOC 分析。
+    支持多轮对话、追问、历史结果查询等。
+    """
+    print()
+    print("=" * 56)
+    print("  [i]   IOC-Detector Agent ")
+    print("  AI ")
+    print("   /exit  /quit ")
+    print("   /skills  Skill")
+    print("=" * 56)
+    print()
+
+    # 加载 agent_controller skill
+    agent_skill = skill_mgr.get_skill("agent_controller")
+    if agent_skill is None:
+        print("[X]  agent_controller skill  skills/agent_controller/ ")
+        return
+
+    history: list[dict] = []
+
+    while True:
+        try:
+            user_input = input("  [you] 你: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n\n  [bye] ")
+            break
+
+        if not user_input:
+            continue
+
+        low = user_input.lower()
+        if low in ("/exit", "/quit", "exit", "quit"):
+            print("  [bye] ")
+            break
+
+        if low == "/skills":
+            print("\n   Skill:")
+            for name in skill_mgr.list_skills():
+                sk = skill_mgr.get_skill(name)
+                if sk:
+                    print(f"    - {name}: {sk.info.description}")
+            print()
+            continue
+
+        # 调用 agent
+        print("  [...]  ...")
+        try:
+            result = agent_skill.execute(
+                user_input=user_input,
+                skill_mgr=skill_mgr,
+                conversation_history=history,
+            )
+        except Exception as e:
+            print(f"\n  [X]  Agent : {e}")
+            continue
+
+        print(f"\n  [Agent] Agent: {result.get('content', '')}")
+        print()
+
+        # 更新对话历史
+        history = result.get("history", history)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="IOC 识别 Agent - 自动化威胁指标提取与分析",
@@ -331,6 +399,12 @@ def main():
         action="store_true",
         help="交互模式",
     )
+    parser.add_argument(
+        "--agent", "-a",
+        action="store_true",
+        help="AI Agent 对话模式（LLM 自动理解意图并调用 Skill）",
+    )
+
     parser.add_argument(
         "--env",
         default="config/settings.env",
@@ -375,6 +449,12 @@ def main():
         text = read_local_file(args.file)
         logger.info(f"读取本地文件: {args.file}，共 {len(text)} 字符")
         run_pipeline(text=text)
+    elif args.agent:
+        # Agent 对话模式
+        _print_banner()
+        skill_mgr, _ = init_agent()
+        run_agent(skill_mgr)
+
     else:
         # 无参数默认进入交互模式
         _print_banner()
