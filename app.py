@@ -6,6 +6,7 @@ import sys, os, csv
 from io import BytesIO, StringIO
 from pathlib import Path
 from datetime import datetime
+from loguru import logger
 
 import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent))
@@ -66,51 +67,149 @@ def run_pipeline(url: str | None = None, text: str | None = None):
     ctx = Context()
     pb = st.progress(0, text="")
     sp = st.empty()
+
     def up(step, total, msg):
         pb.progress(step / total, text=msg)
         sp.info(msg)
+
     T, c = 5, 0
 
+    # ── 第 1 步：网页抓取（失败则直接返回） ──
     c += 1
     if url:
         ctx.url = url
         up(c, T, f"[{c}/{T}] 正在抓取网页: {url}")
-        r = scheduler.run_skill(ctx, "web_crawler", url=url)
-        ctx.cleaned_text = r.get("cleaned_text", "")
+        try:
+            r = scheduler.run_skill(ctx, "web_crawler", url=url)
+            ctx.cleaned_text = r.get("cleaned_text", "")
+        except Exception as e:
+            pb.empty()
+            sp.error(f"网页抓取失败，无法继续分析: {e}")
+            logger.error(f"网页抓取失败: {e}")
+            return ctx
     elif text:
         ctx.cleaned_text = text
         up(c, T, f"[{c}/{T}] 使用输入文本 ({len(text)} 字符)")
-    if not ctx.cleaned_text.strip():
-        pb.empty(); sp.error("抓取内容为空"); return ctx
+    else:
+        pb.empty()
+        sp.error("请提供 URL 或文本")
+        return ctx
 
+    if not ctx.cleaned_text.strip():
+        pb.empty()
+        sp.error("抓取内容为空，无法分析")
+        return ctx
+
+    # ── 第 2 步：IOC 提取（失败则直接返回） ──
     c += 1
     up(c, T, f"[{c}/{T}] 正在提取 IOC 指标...")
-    r = scheduler.run_skill(ctx, "ioc_extractor", text=ctx.cleaned_text)
-    ctx.extracted_iocs = r.get("iocs", [])
-    if not ctx.extracted_iocs:
-        pb.empty(); sp.warning("未提取到任何 IOC"); return ctx
+    try:
+        r = scheduler.run_skill(ctx, "ioc_extractor", text=ctx.cleaned_text)
+        ctx.extracted_iocs = r.get("iocs", [])
+    except Exception as e:
+        pb.empty()
+        sp.error(f"IOC 提取失败: {e}")
+        logger.error(f"IOC 提取失败: {e}")
+        return ctx
 
+    if not ctx.extracted_iocs:
+        pb.empty()
+        sp.warning("未提取到任何 IOC")
+        return ctx
+
+    # ── 第 3 步：白名单过滤（失败则降级保留全部 IOC） ──
     c += 1
     up(c, T, f"[{c}/{T}] 正在白名单过滤...")
     dd = os.getenv("WHITELIST_DATA_DIR", "skills/whitelist_filter/data")
-    r = scheduler.run_skill(ctx, "whitelist_filter", iocs=ctx.extracted_iocs, data_dir=dd)
-    ctx.filtered_iocs = r.get("suspicious_iocs", [])
-    if not ctx.filtered_iocs:
-        pb.empty(); sp.success("所有 IOC 均通过白名单过滤"); return ctx
+    try:
+        r = scheduler.run_skill(ctx, "whitelist_filter", iocs=ctx.extracted_iocs, data_dir=dd)
+        ctx.filtered_iocs = r.get("suspicious_iocs", [])
+    except Exception as e:
+        pb.empty()
+        sp.warning(f"白名单过滤失败（降级处理）: {e}")
+        logger.warning(f"白名单过滤失败，保留全部 IOC: {e}")
+        # 降级：保留全部 IOC（宁可多报，不可漏报）
+        ctx.filtered_iocs = ctx.extracted_iocs
 
+    if not ctx.filtered_iocs:
+        pb.empty()
+        sp.success("所有 IOC 均通过白名单过滤，无需进一步分析")
+        return ctx
+
+    # ── 第 4 步：LLM 语义分析（失败则全部标记为可疑） ──
     c += 1
     up(c, T, f"[{c}/{T}] 正在进行 LLM 语义分析...")
-    r = scheduler.run_skill(ctx, "llm_analyzer", iocs=ctx.filtered_iocs)
-    ctx.analyzed_iocs = r.get("analyzed_iocs", [])
+    try:
+        r = scheduler.run_skill(ctx, "llm_analyzer", iocs=ctx.filtered_iocs)
+        ctx.analyzed_iocs = r.get("analyzed_iocs", [])
+        # 记录降级信息到 metadata
+        if r.get("llm_error"):
+            ctx.metadata["llm_warning"] = r.get("llm_error")
+            sp.warning(f"⚠️ LLM API 调用失败，已使用本地兜底分析")
+            logger.warning(f"LLM 降级: {r.get('llm_error')}")
+        elif r.get("note"):
+            ctx.metadata["llm_note"] = r.get("note")
+            sp.info(f"ℹ️ {r.get('note')}")
+    except Exception as e:
+        pb.empty()
+        sp.warning(f"LLM 分析失败（降级处理）: {e}")
+        logger.warning(f"LLM 分析失败，降级标记为可疑: {e}")
+        # 降级：全部标记为可疑
+        ctx.analyzed_iocs = []
+        for ioc in ctx.filtered_iocs:
+            enriched = dict(ioc)
+            enriched["malicious"] = "suspicious"
+            enriched["reason"] = f"LLM 分析失败，标记为待验证"
+            enriched["label"] = "待验证"
+            ctx.analyzed_iocs.append(enriched)
 
+    if not ctx.analyzed_iocs:
+        pb.empty()
+        sp.warning("LLM 分析后无有效 IOC")
+        return ctx
+
+    # ── 第 5 步：威胁情报查询（修复合并逻辑 + 错误检测） ──
     c += 1
     up(c, T, f"[{c}/{T}] 正在查询威胁情报...")
-    try:
-        r = scheduler.run_skill(ctx, "threat_intel", iocs=ctx.analyzed_iocs)
-        ctx.analyzed_iocs = r.get("enriched_iocs", ctx.analyzed_iocs)
-    except Exception:
-        pass
+    if os.getenv("VT_API_KEY") or os.getenv("OTX_API_KEY"):
+        source = "vt" if os.getenv("VT_API_KEY") else "otx"
+        try:
+            r = scheduler.run_skill(ctx, "threat_intel", iocs=ctx.analyzed_iocs, source=source)
+            intel_results = r.get("results", [])
+            if r.get("mock"):
+                ctx.metadata["intel_note"] = "威胁情报查询使用模拟数据（未配置有效 API Key）"
+                sp.info("ℹ️ 威胁情报查询使用模拟数据（未配置有效 API Key）")
+            else:
+                # 检测是否所有结果都是 unknown 且包含错误信息
+                has_error = False
+                for item in intel_results:
+                    if item.get("malicious") == "unknown" and item.get("details", "").strip():
+                        # 如果 details 包含 error 或 failed 等字样，视为错误
+                        details_lower = item["details"].lower()
+                        if "error" in details_lower or "failed" in details_lower or "401" in details_lower:
+                            has_error = True
+                            break
+                if has_error:
+                    ctx.metadata["intel_warning"] = "威胁情报查询失败（API 错误或网络问题），部分 IOC 无情报结果"
+                    sp.warning("⚠️ 威胁情报查询失败（API 错误或网络问题）")
+                    logger.warning("威胁情报查询失败，检测到错误信息")
+                else:
+                    # 正常合并
+                    intel_map = {item["value"]: item for item in intel_results}
+                    for ioc in ctx.analyzed_iocs:
+                        val = ioc.get("value", "")
+                        if val in intel_map:
+                            ioc["threat_intel"] = intel_map[val]
+                    logger.success("威胁情报查询完成")
+        except Exception as e:
+            ctx.metadata["intel_warning"] = str(e)
+            sp.warning(f"威胁情报查询失败（不影响分析结果）: {e}")
+            logger.warning(f"威胁情报查询失败: {e}")
+    else:
+        ctx.metadata["intel_note"] = "跳过威胁情报查询（未配置 API Key）"
+        sp.info("跳过威胁情报查询（未配置 API Key）")
 
+    # ── 共用代码（无论是否有 Key 都执行） ──
     pb.empty()
     sp.success(f"分析完成！共处理 {len(ctx.analyzed_iocs)} 个 IOC")
     generate_report(ctx, write=False)
@@ -181,6 +280,25 @@ def _build_csv_str(ctx: Context) -> str:
     return buf.getvalue()
 
 def display_results(ctx: Context):
+    # ── 显示降级/错误状态 ──
+    warnings = []
+    notes = []
+    if ctx.metadata.get("llm_warning"):
+        warnings.append(f"LLM API 错误: {ctx.metadata['llm_warning'][:100]}...")
+    if ctx.metadata.get("intel_warning"):
+        warnings.append(f"威胁情报错误: {ctx.metadata['intel_warning']}")
+    if ctx.metadata.get("llm_note"):
+        notes.append(ctx.metadata['llm_note'])
+    if ctx.metadata.get("intel_note"):
+        notes.append(ctx.metadata['intel_note'])
+    
+    if warnings:
+        for w in warnings:
+            st.warning(f"⚠️ {w}")
+    if notes:
+        for n in notes:
+            st.info(f"ℹ️ {n}")
+
     mal = [i for i in ctx.analyzed_iocs if i.get("malicious")=="malicious"]
     sus = [i for i in ctx.analyzed_iocs if i.get("malicious")=="suspicious"]
     ben = [i for i in ctx.analyzed_iocs if i.get("malicious")=="benign"]
@@ -260,7 +378,11 @@ def main():
         if st.button("\U0001f680 开始分析", width="stretch", type="primary"):
             if not url.strip(): st.warning("请输入有效的 URL")
             else:
-                with st.spinner(""): ctx = run_pipeline(url=url.strip())
+                with st.spinner(""):
+                    ctx = run_pipeline(url=url.strip())
+                if ctx is None:
+                    st.error("分析过程发生未知错误，无法获取结果")
+                    return
                 if ctx.analyzed_iocs or ctx.filtered_iocs:
                     st.session_state["last_ctx"] = ctx; display_results(ctx)
                 elif ctx.extracted_iocs: st.info("所有 IOC 均通过白名单过滤")
@@ -270,7 +392,11 @@ def main():
         if st.button("\U0001f680 开始分析", width="stretch", type="primary"):
             if not text.strip(): st.warning("请输入文本内容")
             else:
-                with st.spinner(""): ctx = run_pipeline(text=text.strip())
+                with st.spinner(""):
+                    ctx = run_pipeline(text=text.strip())
+                if ctx is None:
+                    st.error("分析过程发生未知错误，无法获取结果")
+                    return
                 if ctx.analyzed_iocs or ctx.filtered_iocs:
                     st.session_state["last_ctx"] = ctx; display_results(ctx)
                 elif ctx.extracted_iocs: st.info("所有 IOC 均通过白名单过滤")
@@ -281,7 +407,11 @@ def main():
             tp = Path(f"/tmp/{uploaded.name}"); tp.parent.mkdir(parents=True, exist_ok=True)
             with open(tp, "wb") as f: f.write(uploaded.getbuffer())
             try:
-                with st.spinner(""): ctx = run_pipeline(text=read_local_file(str(tp)))
+                with st.spinner(""):
+                    ctx = run_pipeline(text=read_local_file(str(tp)))
+                if ctx is None:
+                    st.error("分析过程发生未知错误，无法获取结果")
+                    return
                 if ctx.analyzed_iocs or ctx.filtered_iocs:
                     st.session_state["last_ctx"] = ctx; display_results(ctx)
                 elif ctx.extracted_iocs: st.info("所有 IOC 均通过白名单过滤")
@@ -298,7 +428,12 @@ def main():
                 all_ctxs = []; progress = st.progress(0, text=f"批量分析中... (0/{len(urls)})")
                 for idx, url in enumerate(urls):
                     progress.progress((idx+1)/len(urls), text=f"批量分析中... ({idx+1}/{len(urls)}) {url}")
-                    try: all_ctxs.append(run_pipeline(url=url))
+                    try:
+                        ctx = run_pipeline(url=url)
+                        if ctx is None:
+                            st.error(f"URL 分析返回空结果: {url}")
+                            continue
+                        all_ctxs.append(ctx)
                     except Exception as e: st.error(f"URL 分析失败: {url} \u2014 {e}")
                 progress.empty()
                 total_mal = sum(1 for c in all_ctxs for i in c.analyzed_iocs if i.get("malicious") in ("malicious","suspicious"))
