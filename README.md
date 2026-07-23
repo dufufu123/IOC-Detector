@@ -188,6 +188,15 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
 - **JSON 导出**：机器可读，包含完整上下文
 - **Log 日志**：Loguru 全流程日志，按日期滚动存储
 
+
+##### 4.6 agent_controller — AI Agent 对话 Skill（v2.0）
+
+- **功能**：Prompt 驱动 LLM 自主编排 Skill 流程，支持多轮对话、流程裁剪、单 IOC 查询、格式导出、项目问答
+- **输入**：`user_input`（自然语言）、`skill_mgr`、`conversation_history`
+- **输出**：`type`（answer/refuse）、`content`、`history`
+- **工具数**：11 个（web_crawl、extract_iocs、filter_whitelist、analyze_iocs、query_intel、save_report、lookup_ioc、project_info、read_local_file、recent_report、rerun_last）
+- **启动**：`python main.py --agent`
+
 ---
 
 ## 3. 核心流程详解
@@ -321,6 +330,14 @@ python main.py --interactive
 > file /abs/path/urls.txt    # 也可用绝对/相对路径
 > 输入 'exit' 退出
 > 输入 'skills' 查看可用 Skill
+
+# 示例 3.5：AI Agent 对话模式（LLM 自动编排 Skill）
+python main.py --agent
+python main.py -a
+> 分析这个链接 https://example.com/report   # 自然语言描述需求
+> 只提取IOC，不要分析                       # LLM 自动裁剪流程
+> 报告存在哪                                # 项目问答
+> 导出Excel                                 # 格式导出
 
 # 示例 4：指定 API Key 启动
 LLM_API_KEY=sk-xxx python main.py --text "分析这段文本的IOC"
@@ -483,10 +500,10 @@ def execute(param1: str, **kwargs) -> dict:
 ## 8. 路线图（后续可扩展方向）
 
 - **短期**：接入更多国内威胁情报源（微步在线、奇安信情报），完善正则覆盖（增加 Mutex、PipeName 等 Windows 指标）
-- **中期**：集成 LangGraph 增强 Agent 编排能力，升级为真正的 AI Agent（LLM 决策循环）
+- **已完成**：AI Agent 对话模式（--agent），LLM 自主编排 Skill，支持多轮追问、流程裁剪、格式智能提问
 - **已完成**：Web GUI 可视化界面（Streamlit），通过 skills/gui/ Skill 外挂实现
 - **长期**：支持批量文件分析、定时抓取任务、记忆系统（ChromaDB 实现长期 IOC 关联分析）
 
 ---
 
-*文档版本：v1.2 | 最后更新：2026-07-20*
+*文档版本：v1.3 | 最后更新：2026-07-23*
