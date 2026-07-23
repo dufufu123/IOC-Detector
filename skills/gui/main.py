@@ -1,4 +1,4 @@
-﻿"""GUI Skill —— 启动 Streamlit Web 界面"""
+"""GUI Skill —— 启动 Streamlit Web 界面"""
 
 from __future__ import annotations
 import sys, os, subprocess, webbrowser, time
