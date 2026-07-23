@@ -61,13 +61,19 @@ def run_pipeline(url: str | None = None, text: str | None = None,
     skill_mgr, scheduler = init_agent()
     ctx = Context()
 
-    # ── 第 1 步：网页抓取 ──────────────────
+    # ── 第1步：网页抓取 ──────────────────────────────
     if url:
         ctx.url = url
         logger.info(f"[1/5] 抓取网页: {url}")
-        result = scheduler.run_skill(ctx, "web_crawler", url=url)
-        ctx.cleaned_text = result.get("cleaned_text", "")
-        logger.success(f"  抓取完成，正文长度: {len(ctx.cleaned_text)} 字")
+        try:
+            result = scheduler.run_skill(ctx, "web_crawler", url=url)
+            ctx.cleaned_text = result.get("cleaned_text", "")
+            logger.success(f"  抓取完成，正文长度: {len(ctx.cleaned_text)} 字")
+        except Exception as e:
+            logger.error(f"  网页抓取失败: {e}")
+            ctx.metadata["crawler_error"] = str(e)
+            ctx.metadata["crawler_error_type"] = type(e).__name__
+            return ctx  # 无法继续，直接返回
     elif text:
         ctx.cleaned_text = text
     else:
@@ -75,13 +81,20 @@ def run_pipeline(url: str | None = None, text: str | None = None,
 
     if not ctx.cleaned_text.strip():
         logger.error("抓取内容为空，无法分析")
+        ctx.metadata["crawler_warning"] = "抓取内容为空"
         return ctx
 
-    # ── 第 2 步：IOC 提取 ──────────────────
+    # ── 第2步：IOC指标提取 ──────────────────────────────
     logger.info("[2/5] 提取 IOC 指标")
-    result = scheduler.run_skill(ctx, "ioc_extractor", text=ctx.cleaned_text)
-    ctx.extracted_iocs = result.get("iocs", [])
-    logger.success(f"  提取到 {len(ctx.extracted_iocs)} 个 IOC")
+    try:
+        result = scheduler.run_skill(ctx, "ioc_extractor", text=ctx.cleaned_text)
+        ctx.extracted_iocs = result.get("iocs", [])
+        logger.success(f"  提取到 {len(ctx.extracted_iocs)} 个 IOC")
+    except Exception as e:
+        logger.error(f"  IOC 提取失败: {e}")
+        ctx.metadata["extractor_error"] = str(e)
+        ctx.metadata["extractor_error_type"] = type(e).__name__
+        return ctx  # 无法继续
 
     if not ctx.extracted_iocs:
         logger.warning("未提取到任何 IOC")
@@ -95,51 +108,82 @@ def run_pipeline(url: str | None = None, text: str | None = None,
     for t, c in sorted(type_counts.items()):
         logger.info(f"    {t}: {c} 个")
 
-    # ── 第 3 步：白名单过滤 ──────────────────
+    # ── 第3步：白名单过滤 ──────────────────────────────
     logger.info("[3/5] 白名单过滤")
     data_dir = os.getenv("WHITELIST_DATA_DIR", "skills/whitelist_filter/data")
-    result = scheduler.run_skill(
-        ctx, "whitelist_filter",
-        iocs=ctx.extracted_iocs,
-        data_dir=data_dir,
-    )
-    ctx.filtered_iocs = result.get("suspicious_iocs", [])
-    safe_count = result.get("safe_count", 0)
-    logger.success(f"  白名单命中: {safe_count} 个，剩余可疑: {len(ctx.filtered_iocs)} 个")
+    try:
+        result = scheduler.run_skill(
+            ctx, "whitelist_filter",
+            iocs=ctx.extracted_iocs,
+            data_dir=data_dir,
+        )
+        ctx.filtered_iocs = result.get("suspicious_iocs", [])
+        safe_count = result.get("safe_count", 0)
+        logger.success(f"  白名单命中: {safe_count} 个，剩余可疑: {len(ctx.filtered_iocs)} 个")
+    except Exception as e:
+        logger.error(f"  白名单过滤失败: {e}")
+        ctx.metadata["whitelist_error"] = str(e)
+        ctx.metadata["whitelist_error_type"] = type(e).__name__
+        # 降级：保留全部 IOC 作为可疑（宁可多报，不可漏报）
+        ctx.filtered_iocs = ctx.extracted_iocs
+        logger.warning(f"  降级：保留全部 {len(ctx.filtered_iocs)} 个 IOC 进入后续分析")
 
     if not ctx.filtered_iocs:
         logger.info("所有 IOC 均已通过白名单过滤，无需进一步分析")
         return ctx
 
-    # ── 第 4 步：LLM 语义分析 ───────────────
+    # ── 第4步：LLM 语义分析 ──────────────────────────────
     logger.info("[4/5] LLM 语义分析")
-    result = scheduler.run_skill(
-        ctx, "llm_analyzer",
-        iocs=ctx.filtered_iocs,
-    )
-    ctx.analyzed_iocs = result.get("analyzed_iocs", [])
+    try:
+        result = scheduler.run_skill(
+            ctx, "llm_analyzer",
+            iocs=ctx.filtered_iocs,
+        )
+        ctx.analyzed_iocs = result.get("analyzed_iocs", [])
+    except Exception as e:
+        logger.error(f"  LLM 分析失败: {e}")
+        ctx.metadata["llm_error"] = str(e)
+        ctx.metadata["llm_error_type"] = type(e).__name__
+        # 降级：全部标记为可疑
+        ctx.analyzed_iocs = []
+        for ioc in ctx.filtered_iocs:
+            enriched = dict(ioc)
+            enriched["malicious"] = "suspicious"
+            enriched["reason"] = f"LLM 分析失败，标记为待验证 ({type(e).__name__})"
+            enriched["label"] = "待验证"
+            ctx.analyzed_iocs.append(enriched)
+        logger.warning(f"  降级：将 {len(ctx.analyzed_iocs)} 个 IOC 标记为可疑")
+
+    if not ctx.analyzed_iocs:
+        logger.warning("LLM 分析后无有效 IOC")
+        return ctx
 
     malicious = sum(1 for i in ctx.analyzed_iocs if i.get("malicious") == "malicious")
     suspicious = sum(1 for i in ctx.analyzed_iocs if i.get("malicious") == "suspicious")
     benign = sum(1 for i in ctx.analyzed_iocs if i.get("malicious") == "benign")
     logger.success(f"  LLM 分析完成: 恶意={malicious}, 可疑={suspicious}, 良性={benign}")
 
-    # ── 第 5 步：威胁情报查询 ───────────────
+    # ── 第5步：威胁情报查询 ──────────────────────────────
     logger.info("[5/5] 威胁情报查询（可选）")
     if os.getenv("VT_API_KEY") or os.getenv("OTX_API_KEY"):
         source = "vt" if os.getenv("VT_API_KEY") else "otx"
-        result = scheduler.run_skill(
-            ctx, "threat_intel",
-            iocs=ctx.analyzed_iocs,
-            source=source,
-        )
-        intel_results = result.get("results", [])
-        intel_map = {r["value"]: r for r in intel_results}
-        for ioc in ctx.analyzed_iocs:
-            val = ioc.get("value", "")
-            if val in intel_map:
-                ioc["threat_intel"] = intel_map[val]
-        logger.success(f"  威胁情报查询完成")
+        try:
+            result = scheduler.run_skill(
+                ctx, "threat_intel",
+                iocs=ctx.analyzed_iocs,
+                source=source,
+            )
+            intel_results = result.get("results", [])
+            intel_map = {r["value"]: r for r in intel_results}
+            for ioc in ctx.analyzed_iocs:
+                val = ioc.get("value", "")
+                if val in intel_map:
+                    ioc["threat_intel"] = intel_map[val]
+            logger.success(f"  威胁情报查询完成")
+        except Exception as e:
+            logger.warning(f"  威胁情报查询失败（不影响分析结果）: {e}")
+            ctx.metadata["intel_error"] = str(e)
+            ctx.metadata["intel_error_type"] = type(e).__name__
     else:
         logger.info("  跳过（未配置 API Key）")
 
