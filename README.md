@@ -51,10 +51,10 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
 │  │Web       │ │IOC       │ │WhiteList │ │LLM       │   │
 │  │Crawler   │ │Extractor │ │Filter    │ │Analyzer  │   │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │
-│  ┌──────────┐                                           │
-│  │Threat    │                                           │
-│  │Intel     │                                           │
-│  └──────────┘                                           │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐               │
+│  │Threat    │ │GUI       │ │Agent     │               │
+│  │Intel     │ │(Streamlit)│ │Controller│               │
+│  └──────────┘ └──────────┘ └──────────┘               │
 └───────────────────────┬─────────────────────────────────┘
                         │
 ┌───────────────────────▼─────────────────────────────────┐
@@ -65,8 +65,8 @@ IOC（Indicator of Compromise，威胁指标）是网络安全领域中用于描
                         │
 ┌───────────────────────▼─────────────────────────────────┐
 │                   数据存储层                              │
-│  结构化报告：Markdown  +  JSON 导出到 output/ 目录       │
-│  持久化（可选）：SQLite / ChromaDB                       │
+│  结构化报告：Markdown / JSON / CSV / Excel 导出到 output/     │
+│  持久化（可选）：SQLite / ChromaDB                              │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -286,6 +286,9 @@ cd ioc-agent-demo
 # 2. 安装依赖
 pip install -r requirements.txt
 
+# （可选）GUI 模式需额外安装 Streamlit：
+pip install streamlit
+
 # 3. 配置 API Key（可选）
 编辑 config/settings.env，填入 LLM_API_KEY
 
@@ -375,6 +378,8 @@ output/
 ├── md/2026.7/    ioc_report_20260714_143022_64eeab1eb5bc.md    # 单次分析报告
 │                 ioc_batch_20260714_150000_2c5633d9aa84.md     # 批量（-f）汇总报告
 ├── json/2026.7/  ioc_report_20260714_143022_64eeab1eb5bc.json
+├── csv/2026.7/   ioc_report_20260714_143022_64eeab1eb5bc.csv   # CSV 导出
+├── xlsx/2026.7/  ioc_report_20260714_143022_64eeab1eb5bc.xlsx  # Excel 导出
 └── log/2026.7/   ioc_agent_2026-07-14.log                      # 运行日志
 ```
 
@@ -507,3 +512,7 @@ def execute(param1: str, **kwargs) -> dict:
 ---
 
 *文档版本：v1.3 | 最后更新：2026-07-23*
+
+---
+
+> **仓库地址**：[https://github.com/dufufu123/IOC-Detector](https://github.com/dufufu123/IOC-Detector)
